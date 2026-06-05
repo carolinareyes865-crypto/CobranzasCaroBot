@@ -152,4 +152,23 @@ def main():
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
+            ESPERANDO_RESPUESTA: [
+                CallbackQueryHandler(respuesta_si, pattern="^si$"),
+                CallbackQueryHandler(respuesta_no, pattern="^no$"),
+            ],
+            ESPERANDO_FECHA:       [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_fecha)],
+            ESPERANDO_NOMBRE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_nombre)],
+            ESPERANDO_CEDULA:      [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_cedula)],
+            ESPERANDO_COMPROBANTE: [MessageHandler(filters.PHOTO | filters.Document.ALL, recibir_comprobante)],
+            ESPERANDO_MOTIVO:      [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_motivo)],
+        },
+        fallbacks=[CommandHandler("cancelar", cancelar)],
+        per_message=False,
+    )
 
+    app.add_handler(conv)
+    logger.info("Bot iniciado ✅")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
