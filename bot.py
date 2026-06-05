@@ -2,12 +2,16 @@ import os
 import logging
 import threading
 import asyncio
+import io
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler, filters, ContextTypes
 )
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,18 +35,85 @@ def iniciar_servidor():
     server = HTTPServer(("0.0.0.0", port), PingHandler)
     server.serve_forever()
 
+def generar_excel_pago(datos: dict, usuario: str) -> io.BytesIO:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Reporte de Pago"
+    header_fill = PatternFill("solid", fgColor="1F7A4D")
+    header_font = Font(bold=True, color="FFFFFF", size=12)
+    for col, titulo in enumerate(["Campo", "Detalle"], 1):
+        cell = ws.cell(row=1, column=col, value=titulo)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+    filas = [
+        ("📋 Tipo de reporte",   "PAGO CONFIRMADO ✅"),
+        ("🏢 Empresa / Nombre",  datos.get("nombre", "N/A")),
+        ("🪪 Cédula / RUC",      datos.get("cedula", "N/A")),
+        ("📅 Fecha de pago",     datos.get("fecha", "N/A")),
+        ("👤 Usuario Telegram",  f"@{usuario}"),
+        ("🕐 Fecha de registro", datetime.now().strftime("%d/%m/%Y %H:%M")),
+        ("✅ Estado",            "VA A PAGAR"),
+    ]
+    fill_par = PatternFill("solid", fgColor="E8F5E9")
+    for i, (campo, valor) in enumerate(filas, 2):
+        ws.cell(row=i, column=1, value=campo).font = Font(bold=True)
+        ws.cell(row=i, column=2, value=valor)
+        if i % 2 == 0:
+            for col in range(1, 3):
+                ws.cell(row=i, column=col).fill = fill_par
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 35
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+def generar_excel_no_pago(datos: dict, usuario: str) -> io.BytesIO:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Reporte No Pago"
+    header_fill = PatternFill("solid", fgColor="C0392B")
+    header_font = Font(bold=True, color="FFFFFF", size=12)
+    for col, titulo in enumerate(["Campo", "Detalle"], 1):
+        cell = ws.cell(row=1, column=col, value=titulo)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+    filas = [
+        ("📋 Tipo de reporte",   "NO VA A PAGAR ❌"),
+        ("🏢 Empresa / Nombre",  datos.get("nombre", "N/A")),
+        ("🪪 Cédula / RUC",      datos.get("cedula", "N/A")),
+        ("📝 Motivo",            datos.get("motivo", "N/A")),
+        ("👤 Usuario Telegram",  f"@{usuario}"),
+        ("🕐 Fecha de registro", datetime.now().strftime("%d/%m/%Y %H:%M")),
+        ("❌ Estado",            "NO VA A PAGAR"),
+    ]
+    fill_par = PatternFill("solid", fgColor="FDECEA")
+    for i, (campo, valor) in enumerate(filas, 2):
+        ws.cell(row=i, column=1, value=campo).font = Font(bold=True)
+        ws.cell(row=i, column=2, value=valor)
+        if i % 2 == 0:
+            for col in range(1, 3):
+                ws.cell(row=i, column=col).fill = fill_par
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 35
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 *¡Bienvenido al Bot de Cobranzas Caro!*\n\n"
         "Estamos aquí para ayudarle a gestionar su pago de forma rápida y sencilla. 😊",
         parse_mode="Markdown"
     )
-    teclado = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ SI", callback_data="si"),
-            InlineKeyboardButton("❌ NO", callback_data="no"),
-        ]
-    ])
+    teclado = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ SI", callback_data="si"),
+        InlineKeyboardButton("❌ NO", callback_data="no"),
+    ]])
     await update.message.reply_text(
         "Estimado cliente:\n\n"
         "Por favor, ayúdenos con la cancelación del monto pendiente "
@@ -53,9 +124,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ESPERANDO_RESPUESTA
 
+# ── RAMA SI ──
 async def respuesta_si(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    context.user_data["estado"] = "SI"
     await query.message.reply_text(
         "✅ *¡Gracias por su confirmación!*\n\n"
         "Por favor ingrese la *fecha en que realizará el pago*:\n\n"
@@ -66,31 +139,18 @@ async def respuesta_si(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def recibir_fecha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fecha"] = update.message.text
-    await update.message.reply_text(
-        "📋 Por favor ingrese el *nombre de su empresa o negocio*:",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("📋 Por favor ingrese el *nombre de su empresa o negocio*:", parse_mode="Markdown")
     return ESPERANDO_NOMBRE
 
 async def recibir_nombre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["nombre"] = update.message.text
-    await update.message.reply_text(
-        "🪪 Ingrese su *número de cédula o RUC*:",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("🪪 Ingrese su *número de cédula o RUC*:", parse_mode="Markdown")
     return ESPERANDO_CEDULA
 
 async def recibir_cedula(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["cedula"] = update.message.text
-    teclado = ReplyKeyboardMarkup(
-        [["📤 Enviar comprobante"]],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
     await update.message.reply_text(
-        "🧾 Por favor *adjunte la foto o captura del comprobante de pago*\n\n"
-        "Cuando tenga lista la imagen, adjúntela y presione *enviar* 📤",
-        reply_markup=teclado,
+        "🧾 Por favor *adjunte la foto o captura del comprobante de pago* y presione enviar 📤",
         parse_mode="Markdown"
     )
     return ESPERANDO_COMPROBANTE
@@ -99,6 +159,7 @@ async def recibir_comprobante(update: Update, context: ContextTypes.DEFAULT_TYPE
     datos = context.user_data
     foto = update.message.photo[-1] if update.message.photo else None
     doc = update.message.document
+    usuario = update.effective_user.username or "sin_usuario"
 
     if not foto and not doc:
         await update.message.reply_text(
@@ -107,40 +168,55 @@ async def recibir_comprobante(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return ESPERANDO_COMPROBANTE
 
-    resumen = (
+    nombre_archivo = f"pago_{datos.get('cedula','xxx')}_{datetime.now().strftime('%d%m%Y')}.xlsx"
+
+    # ── A Carolina: mensaje + excel + comprobante ──
+    await context.bot.send_message(
+        ENCARGADA_ID,
         "📋 *NUEVO REPORTE DE PAGO*\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"🏢 Empresa/Nombre: {datos.get('nombre', 'N/A')}\n"
         f"🪪 Cédula/RUC: {datos.get('cedula', 'N/A')}\n"
         f"📅 Fecha de pago: {datos.get('fecha', 'N/A')}\n"
         f"✅ Estado: *VA A PAGAR*\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"📞 Chat ID: `{update.effective_user.id}`\n"
-        f"👤 Usuario: @{update.effective_user.username or 'sin_usuario'}"
+        "━━━━━━━━━━━━━━━━━━━━",
+        parse_mode="Markdown"
     )
-    await context.bot.send_message(ENCARGADA_ID, resumen, parse_mode="Markdown")
-
+    await context.bot.send_document(
+        ENCARGADA_ID,
+        document=generar_excel_pago(datos, usuario),
+        filename=nombre_archivo,
+        caption="📊 Excel con datos del cliente"
+    )
     if foto:
         await context.bot.send_photo(ENCARGADA_ID, foto.file_id, caption="🧾 Comprobante de pago")
     elif doc:
         await context.bot.send_document(ENCARGADA_ID, doc.file_id, caption="🧾 Comprobante de pago")
 
+    # ── Al cliente: su constancia Excel ──
+    await context.bot.send_document(
+        update.effective_chat.id,
+        document=generar_excel_pago(datos, usuario),
+        filename=f"constancia_{nombre_archivo}",
+        caption="📊 *Su constancia de registro de pago*",
+        parse_mode="Markdown"
+    )
     await update.message.reply_text(
         "✅ *¡Información recibida correctamente!*\n\n"
-        "Hemos registrado su comprobante de pago. "
-        "Nos pondremos en contacto si se necesita algo más.\n\n"
+        "Le enviamos su constancia en Excel. 📊\n\n"
         "Le recordamos que, en caso de no regularizar su pago dentro del "
         "plazo indicado, el servicio podría ser *suspendido*.\n\n"
         "_Gracias por su atención. 🙏_",
-        reply_markup=ReplyKeyboardRemove(),
         parse_mode="Markdown"
     )
     context.user_data.clear()
     return ConversationHandler.END
 
+# ── RAMA NO ──
 async def respuesta_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    context.user_data["estado"] = "NO"
     await query.message.reply_text(
         "Por favor indique el *motivo* por el cual no realizará el pago:",
         parse_mode="Markdown"
@@ -148,16 +224,28 @@ async def respuesta_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ESPERANDO_MOTIVO
 
 async def recibir_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    motivo = update.message.text
-    resumen = (
+    datos = context.user_data
+    datos["motivo"] = update.message.text
+    usuario = update.effective_user.username or "sin_usuario"
+    nombre_archivo = f"nopago_{update.effective_user.id}_{datetime.now().strftime('%d%m%Y')}.xlsx"
+
+    # ── Solo a Carolina: mensaje + excel ──
+    await context.bot.send_message(
+        ENCARGADA_ID,
         "🚨 *REPORTE: NO VA A PAGAR*\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 Chat ID: `{update.effective_user.id}`\n"
-        f"👤 Usuario: @{update.effective_user.username or 'sin_usuario'}\n"
+        f"👤 Usuario: @{usuario}\n"
         f"❌ Estado: *NO VA A PAGAR*\n"
-        f"📝 Motivo: {motivo}"
+        f"📝 Motivo: {datos.get('motivo', 'N/A')}\n"
+        "━━━━━━━━━━━━━━━━━━━━",
+        parse_mode="Markdown"
     )
-    await context.bot.send_message(ENCARGADA_ID, resumen, parse_mode="Markdown")
+    await context.bot.send_document(
+        ENCARGADA_ID,
+        document=generar_excel_no_pago(datos, usuario),
+        filename=nombre_archivo,
+        caption="📊 Excel reporte no pago"
+    )
     await update.message.reply_text(
         "Le recordamos que, en caso de no regularizar su pago dentro del "
         "plazo establecido, el servicio podría ser *suspendido*.\n\n"
@@ -169,10 +257,7 @@ async def recibir_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text(
-        "Proceso cancelado. Escribe /start para comenzar de nuevo.",
-        reply_markup=ReplyKeyboardRemove()
-    )
+    await update.message.reply_text("Proceso cancelado. Escribe /start para comenzar de nuevo.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 async def run_bot():
@@ -203,8 +288,6 @@ async def run_bot():
 def main():
     hilo = threading.Thread(target=iniciar_servidor, daemon=True)
     hilo.start()
-
-    # Ping cada 14 minutos para que Render no duerma
     def keep_alive():
         import urllib.request, time
         url = os.environ.get("RENDER_EXTERNAL_URL", "")
@@ -217,7 +300,6 @@ def main():
             except:
                 pass
     threading.Thread(target=keep_alive, daemon=True).start()
-
     asyncio.run(run_bot())
 
 if __name__ == "__main__":
