@@ -149,7 +149,7 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
-def main():
+async def main():
     app = Application.builder().token(TOKEN).build()
 
     conv = ConversationHandler(
@@ -174,4 +174,5 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
