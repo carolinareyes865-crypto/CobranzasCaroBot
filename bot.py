@@ -203,6 +203,21 @@ async def run_bot():
 def main():
     hilo = threading.Thread(target=iniciar_servidor, daemon=True)
     hilo.start()
+
+    # Ping cada 14 minutos para que Render no duerma
+    def keep_alive():
+        import urllib.request, time
+        url = os.environ.get("RENDER_EXTERNAL_URL", "")
+        while True:
+            time.sleep(14 * 60)
+            try:
+                if url:
+                    urllib.request.urlopen(url)
+                    logger.info("✅ Ping OK")
+            except:
+                pass
+    threading.Thread(target=keep_alive, daemon=True).start()
+
     asyncio.run(run_bot())
 
 if __name__ == "__main__":
