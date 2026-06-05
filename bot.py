@@ -3,7 +3,7 @@ import logging
 import threading
 import asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler, filters, ContextTypes
@@ -57,25 +57,40 @@ async def respuesta_si(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.message.reply_text(
-        "¿Hasta qué *fecha* realizará la cancelación?\n\n_Ejemplo: 15/07/2025_",
+        "✅ *¡Gracias por su confirmación!*\n\n"
+        "Por favor ingrese la *fecha en que realizará el pago*:\n\n"
+        "_Ejemplo: 15/07/2025_",
         parse_mode="Markdown"
     )
     return ESPERANDO_FECHA
 
 async def recibir_fecha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fecha"] = update.message.text
-    await update.message.reply_text("Por favor ingrese su *nombre completo*:", parse_mode="Markdown")
+    await update.message.reply_text(
+        "📋 Por favor ingrese el *nombre de su empresa o negocio*:",
+        parse_mode="Markdown"
+    )
     return ESPERANDO_NOMBRE
 
 async def recibir_nombre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["nombre"] = update.message.text
-    await update.message.reply_text("Ingrese su *número de cédula*:", parse_mode="Markdown")
+    await update.message.reply_text(
+        "🪪 Ingrese su *número de cédula o RUC*:",
+        parse_mode="Markdown"
+    )
     return ESPERANDO_CEDULA
 
 async def recibir_cedula(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["cedula"] = update.message.text
+    teclado = ReplyKeyboardMarkup(
+        [["📤 Enviar comprobante"]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
     await update.message.reply_text(
-        "Por favor *suba una foto del comprobante de pago* 📎",
+        "🧾 Por favor *adjunte la foto o captura del comprobante de pago*\n\n"
+        "Cuando tenga lista la imagen, adjúntela y presione *enviar* 📤",
+        reply_markup=teclado,
         parse_mode="Markdown"
     )
     return ESPERANDO_COMPROBANTE
@@ -85,12 +100,21 @@ async def recibir_comprobante(update: Update, context: ContextTypes.DEFAULT_TYPE
     foto = update.message.photo[-1] if update.message.photo else None
     doc = update.message.document
 
+    if not foto and not doc:
+        await update.message.reply_text(
+            "⚠️ Por favor *adjunte una imagen o archivo* del comprobante de pago.",
+            parse_mode="Markdown"
+        )
+        return ESPERANDO_COMPROBANTE
+
     resumen = (
-        "📋 *NUEVO REPORTE DE PAGO*\n\n"
-        f"👤 Nombre: {datos.get('nombre', 'N/A')}\n"
-        f"🪪 Cédula: {datos.get('cedula', 'N/A')}\n"
-        f"📅 Fecha prometida: {datos.get('fecha', 'N/A')}\n"
+        "📋 *NUEVO REPORTE DE PAGO*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏢 Empresa/Nombre: {datos.get('nombre', 'N/A')}\n"
+        f"🪪 Cédula/RUC: {datos.get('cedula', 'N/A')}\n"
+        f"📅 Fecha de pago: {datos.get('fecha', 'N/A')}\n"
         f"✅ Estado: *VA A PAGAR*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         f"📞 Chat ID: `{update.effective_user.id}`\n"
         f"👤 Usuario: @{update.effective_user.username or 'sin_usuario'}"
     )
@@ -102,9 +126,13 @@ async def recibir_comprobante(update: Update, context: ContextTypes.DEFAULT_TYPE
         await context.bot.send_document(ENCARGADA_ID, doc.file_id, caption="🧾 Comprobante de pago")
 
     await update.message.reply_text(
-        "✅ *¡Gracias!* Hemos recibido su información.\n\n"
+        "✅ *¡Información recibida correctamente!*\n\n"
+        "Hemos registrado su comprobante de pago. "
+        "Nos pondremos en contacto si se necesita algo más.\n\n"
         "Le recordamos que, en caso de no regularizar su pago dentro del "
-        "plazo establecido, el servicio podría ser *suspendido*.",
+        "plazo indicado, el servicio podría ser *suspendido*.\n\n"
+        "_Gracias por su atención. 🙏_",
+        reply_markup=ReplyKeyboardRemove(),
         parse_mode="Markdown"
     )
     context.user_data.clear()
@@ -122,7 +150,8 @@ async def respuesta_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def recibir_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     motivo = update.message.text
     resumen = (
-        "🚨 *REPORTE: NO VA A PAGAR*\n\n"
+        "🚨 *REPORTE: NO VA A PAGAR*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         f"👤 Chat ID: `{update.effective_user.id}`\n"
         f"👤 Usuario: @{update.effective_user.username or 'sin_usuario'}\n"
         f"❌ Estado: *NO VA A PAGAR*\n"
@@ -140,7 +169,10 @@ async def recibir_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text("Proceso cancelado. Escribe /start para comenzar de nuevo.")
+    await update.message.reply_text(
+        "Proceso cancelado. Escribe /start para comenzar de nuevo.",
+        reply_markup=ReplyKeyboardRemove()
+    )
     return ConversationHandler.END
 
 async def run_bot():
